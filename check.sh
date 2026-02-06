@@ -10,5 +10,6 @@ for ((i=1; i<="$last_test_id"; ++i)); do
         echo "Success: test case $i" >&2
     else
         echo "Fail: test case $i" >&2
+        diff <(node "$problem_id.js" <"$problem_id.$i.in.txt") "$problem_id.$i.out.txt"
     fi
 done
