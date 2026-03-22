@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 declare -ri problem_id="$1"
 
 declare -ri last_test_id="${2:-1}"
