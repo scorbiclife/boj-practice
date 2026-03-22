@@ -8,7 +8,7 @@ declare expected
 declare actual
 for ((i=1; i<="$last_test_id"; ++i)); do
     # Posix command substitution trims trailing newlines
-    expected="$(node "$problem_id.js" <"$problem_id.$i.in.txt")"
+    expected="$(jbang "Problem$problem_id.java" <"$problem_id.$i.in.txt")"
     actual="$(cat "$problem_id.$i.out.txt")"
     if [[ "$expected" = "$actual" ]]; then
         echo "Success: test case $i" >&2
