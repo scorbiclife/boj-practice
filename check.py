@@ -7,17 +7,16 @@ import argparse
 import difflib
 
 
-def positive_int(value):
-    try:
-        ivalue = int(value)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"invalid int value: {value!r}")
-    if ivalue <= 0:
-        raise argparse.ArgumentTypeError("must be a positive integer")
-    return ivalue
-
-
 def parse_args(argv):
+    def positive_int(value):
+        try:
+            ivalue = int(value)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"invalid int value: {value!r}")
+        if ivalue <= 0:
+            raise argparse.ArgumentTypeError("must be a positive integer")
+        return ivalue
+
     parser = argparse.ArgumentParser(
         usage="%(prog)s <problem_id> [-n num] [-e ext] [--with RUNNER]",
         description="Check if the given solution transforms the given inputs into the given outputs",
@@ -36,94 +35,90 @@ def parse_args(argv):
     return parser.parse_args(argv)
 
 
-def require_condition(condition, /, exit_message, exit_code):
-    if not condition:
-        sys.stderr.write(exit_message)
-        sys.exit(exit_code)
-
-
-def require_file(file, /, exit_message, exit_code):
-    require_condition(os.path.isfile(file), exit_message, exit_code)
-
-
 def main(argv):
     args = parse_args(argv)
 
-    num_tests_int = args.num_tests
+    num_tests = args.num_tests
     runner = args.runner
     src_ext = args.src_ext
     problem_id = args.problem_id
 
-    src = f"Problem{problem_id}.{src_ext}"
-    require_file(src,
-                 exit_message=f"Error: source file not found. Tried: {src}",
-                 exit_code=1)
+    class MyCommandException(Exception):
+        def __init__(self, test_number, message):
+            self.message = f"Test {test_number}: {message}"
+            super().__init__(self.message)
 
-    for t in range(1, num_tests_int + 1):
-        in_file = f"Problem{problem_id}.{t}.in.txt"
-        # Build command. Run the runner directly (no shell). Accept runner flags (e.g. "python3 -u").
-        runner_parts = shlex.split(runner)
-        require_condition(len(runner_parts) != 0,
-                          exit_message="Error: runner is empty\n",
-                          exit_code=1)
-        cmd_list = runner_parts + [src]
-        proc_stdout = ""
-        try:
-            with open(in_file, 'rb') as stdin_f:
+    def check_all_tests():
+        for test_number in range(1, num_tests + 1):
+            check_test(test_number)
+
+    def check_test(test_number):
+        src_filename = f"Problem{problem_id}.{src_ext}"
+        in_filename = f"Problem{problem_id}.{test_number}.in.txt"
+        out_filename = f"Problem{problem_id}.{test_number}.out.txt"
+
+        def get_actual_output() -> str:
+            command = shlex.split(runner) + [src_filename]
+
+            def run_command():
                 proc = subprocess.run(
-                    cmd_list,
+                    command,
                     shell=False,
-                    stdin=stdin_f,
+                    stdin=in_file,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     check=False,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
                 )
-                proc_stdout = proc.stdout.decode('utf-8', errors='replace')
-                sys.stderr.write(proc.stderr.decode('utf-8', errors='replace'))
-                if proc.returncode != 0:
-                    sys.stderr.write(
-                        f"Error: runner exited with status {proc.returncode}\n")
-                    sys.exit(1)
-        except FileNotFoundError:
-            if not os.file.isfile(in_file):
-                sys.stdout.write(f"Missing input file for test {t} (tried: {in_file})\n")
-                sys.exit(1)
-            # runner executable not found
-            runner_name = runner_parts[0]
-            sys.stderr.write(f"Error: runner not found: {runner_name}\n")
-            sys.exit(1)
-        except Exception as e:
-            sys.stderr.write(f"Unknown error while running runner: {e}\n")
-            sys.exit(1)
+                return proc
 
-        # Normalize trailing newlines
-        actual = proc_stdout.rstrip('\n')
+            try:
+                with open(in_filename, "rb") as in_file:
+                    try:
+                        proc = run_command()
+                        if proc.stderr:
+                            print(f"Stderr output while running command {command}", file=sys.stderr)
+                            print(proc.stderr, file=sys.stderr)
+                        actual_output = proc.stdout
+                        return actual_output
+                    except FileNotFoundError:
+                        raise MyCommandException(test_number, f"Could not find command: {command}")
+                    except Exception as e:
+                        raise MyCommandException(test_number, f"Unknown exception while running command: {command}\n{e}")
+            except FileNotFoundError:
+                raise MyCommandException(test_number, f"Input file not found: {in_filename}")
 
-        # Read output file to get expected output and also normalize trailing newlines
-        out_file = f"Problem{problem_id}.{t}.out.txt"
-        try:
-            with open(out_file, 'r', encoding='utf-8', errors='replace') as f:
-                out_file_contents = f.read()
-        except Exception as e:
-            if not os.file.isfile(out_file):
-                sys.stderr.write(f"Missing output file for test {t} (tried: {out_file})\n")
-                sys.exit(1)
-            sys.stderr.write(
-                f"Unknown error while reading from output file: {e}")
-            sys.exit(1)
-        expected = out_file_contents.rstrip('\n')
+        def get_expected_output() -> str:
+            try:
+                with open(out_filename, "r", encoding="utf-8", errors="replace") as f:
+                    return f.read()
+            except FileNotFoundError:
+                raise MyCommandException(test_number, f"Output file not found: {out_filename}")
 
-        if actual == expected:
-            sys.stderr.write(f"Success: test case {t}\n")
-            continue
+        def normalize_output(output: str) -> list[str]:
+            return output.rstrip("\n")
 
-        sys.stderr.write(f"Fail: test case {t}\n")
-        # Show unified diff using Python's difflib (no external 'diff' required)
-        diff_lines = difflib.unified_diff(
-            actual.splitlines(), expected.splitlines())
-        for line in diff_lines:
-            sys.stdout.write(line)
+        def get_diff(actual, expected) -> str:
+            diff_lines = difflib.unified_diff(actual.splitlines(), expected.splitlines())
+            return "\n".join(diff_lines)
+
+        actual = normalize_output(get_actual_output())
+        expected = normalize_output(get_expected_output())
+        diff = get_diff(actual, expected)
+        if not diff:
+            print(f"Test {test_number}: Success", file=sys.stdout)
+        else:
+            print(f"Test {test_number}: Failure\n{diff}", file=sys.stdout)
+
+    try:
+        check_all_tests()
+    except MyCommandException as e:
+        print(e, file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == '__main__':
-    main(sys.argv[1:])
+    _program_name, *argv = sys.argv
+    main(argv)
